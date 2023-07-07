@@ -95,8 +95,7 @@ type
 
     maxRelayPeers* {.
       desc: "Maximum allowed number of relay peers."
-      defaultValue: 50
-      name: "max-relay-peers" }: uint16
+      name: "max-relay-peers" }: Option[int]
 
     peerStoreCapacity* {.
       desc: "Maximum stored peers in the peerstore."
@@ -536,24 +535,6 @@ proc validateDbUrl*(val: string): ConfResult[string] =
     ok(val)
   else:
     err("invalid 'db url' option format: " & val)
-
-
-let StoreMessageRetentionPolicyRegex = re"^\w+:\w+$"
-
-proc validateStoreMessageRetentionPolicy*(val: string): ConfResult[string] =
-  let val = val.strip()
-
-  if val == "" or val == "none" or val.match(StoreMessageRetentionPolicyRegex):
-    ok(val)
-  else:
-    err("invalid 'store message retention policy' option format: " & val)
-
-proc validateExtMultiAddrs*(vals: seq[string]): ConfResult[seq[MultiAddress]] =
-  var multiaddrs: seq[MultiAddress]
-  for val in vals:
-    let multiaddr = ? MultiAddress.init(val)
-    multiaddrs.add(multiaddr)
-  ok(multiaddrs)
 
 ## Load
 

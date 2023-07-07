@@ -37,7 +37,6 @@ import
   ../waku_lightpush/client as lightpush_client,
   ../waku_enr,
   ../waku_dnsdisc,
-  ../waku_discv5,
   ../waku_peer_exchange,
   ./config,
   ./peer_manager,
@@ -101,36 +100,9 @@ type
     enr*: enr.Record
     libp2pPing*: Ping
     rng*: ref rand.HmacDrbgContext
-    wakuDiscv5*: WakuDiscoveryV5
     rendezvous*: RendezVous
     announcedAddresses* : seq[MultiAddress]
     started*: bool # Indicates that node has started listening
-
-proc getEnr*(netConfig: NetConfig,
-             wakuDiscV5 = none(WakuDiscoveryV5),
-             nodeKey: crypto.PrivateKey): Result[enr.Record, string] =
-  if wakuDiscV5.isSome():
-    return ok(wakuDiscV5.get().protocol.getRecord())
-
-  var builder = EnrBuilder.init(nodeKey, seqNum = 1)
-
-  builder.withIpAddressAndPorts(
-    ipAddr = netConfig.enrIp,
-    tcpPort = netConfig.enrPort,
-    udpPort = netConfig.discv5UdpPort
-  )
-
-  if netConfig.wakuFlags.isSome():
-    builder.withWakuCapabilities(netConfig.wakuFlags.get())
-
-  if netConfig.enrMultiAddrs.len > 0:
-    builder.withMultiaddrs(netConfig.enrMultiAddrs)
-
-  let recordRes = builder.build()
-  if recordRes.isErr():
-    return err($recordRes.error)
-
-  return ok(recordRes.get())
 
 proc getAutonatService*(rng: ref HmacDrbgContext): AutonatService =
   ## AutonatService request other peers to dial us back
@@ -141,13 +113,15 @@ proc getAutonatService*(rng: ref HmacDrbgContext): AutonatService =
   let autonatService = AutonatService.new(
     autonatClient = AutonatClient.new(),
     rng = rng,
-    scheduleInterval = some(chronos.seconds(120)),
+    scheduleInterval = Opt.some(chronos.seconds(120)),
     askNewConnectedPeers = false,
     numPeersToAsk = 3,
     maxQueueSize = 3,
     minConfidence = 0.7)
 
-  proc statusAndConfidenceHandler(networkReachability: NetworkReachability, confidence: Option[float]) {.gcsafe, async.} =
+  proc statusAndConfidenceHandler(networkReachability: NetworkReachability,
+                                  confidence: Opt[float]):
+                                  Future[void]  {.gcsafe, raises: [].} =
     if confidence.isSome():
       info "Peer reachability status", networkReachability=networkReachability, confidence=confidence.get()
 
@@ -156,11 +130,9 @@ proc getAutonatService*(rng: ref HmacDrbgContext): AutonatService =
   return autonatService
 
 proc new*(T: type WakuNode,
-          nodeKey: crypto.PrivateKey,
           netConfig: NetConfig,
-          enr: Option[enr.Record],
+          enr: enr.Record,
           switch: Switch,
-          wakuDiscv5 = none(WakuDiscoveryV5),
           peerManager: PeerManager,
           # TODO: make this argument required after tests are updated
           rng: ref HmacDrbgContext = crypto.newRng()
@@ -169,23 +141,12 @@ proc new*(T: type WakuNode,
 
   info "Initializing networking", addrs= $netConfig.announcedAddresses
 
-  let enr =
-    if enr.isNone():
-      let nodeEnrRes = getEnr(netConfig, wakuDiscv5, nodekey)
-
-      if nodeEnrRes.isErr():
-        raise newException(Defect, "failed to generate the node ENR record: " & $nodeEnrRes.error)
-
-      nodeEnrRes.get()
-    else: enr.get()
-
   return WakuNode(
     peerManager: peerManager,
     switch: switch,
     rng: rng,
     enr: enr,
     announcedAddresses: netConfig.announcedAddresses,
-    wakuDiscv5: if wakuDiscV5.isSome(): wakuDiscV5.get() else: nil,
   )
 
 proc peerInfo*(node: WakuNode): PeerInfo =
@@ -489,45 +450,39 @@ proc unsubscribe*(node: WakuNode, pubsubTopic: PubsubTopic, contentTopics: Conte
   await node.filterUnsubscribe(pubsubTopic, contentTopics, peer=peerOpt.get())
 
 ## Waku archive
-
-proc mountArchive*(node: WakuNode,
-                   driver: Option[ArchiveDriver],
-                   messageValidator: Option[MessageValidator],
-                   retentionPolicy: Option[RetentionPolicy]) =
-
-  if driver.isNone():
-    error "failed to mount waku archive protocol", error="archive driver not set"
-    return
-
-  node.wakuArchive = WakuArchive.new(driver.get(), messageValidator, retentionPolicy)
-
-# TODO: Review this periodic task. Maybe, move it to the appplication code
 const WakuArchiveDefaultRetentionPolicyInterval* = 30.minutes
+proc mountArchive*(node: WakuNode,
+                   driver: ArchiveDriver,
+                   retentionPolicy = none(RetentionPolicy)):
+                   Result[void, string] =
 
-proc executeMessageRetentionPolicy*(node: WakuNode) =
-  if node.wakuArchive.isNil():
-    return
+  let wakuArchiveRes = WakuArchive.new(driver,
+                                       retentionPolicy)
+  if wakuArchiveRes.isErr():
+    return err("error in mountArchive: " & wakuArchiveRes.error)
 
-  debug "executing message retention policy"
+  node.wakuArchive = wakuArchiveRes.get()
 
   try:
-    waitFor node.wakuArchive.executeMessageRetentionPolicy()
-    waitFor node.wakuArchive.reportStoredMessagesMetric()
+    let reportMetricRes = waitFor node.wakuArchive.reportStoredMessagesMetric()
+    if reportMetricRes.isErr():
+      return err("error in mountArchive: " & reportMetricRes.error)
   except CatchableError:
-    debug "Error executing retention policy " & getCurrentExceptionMsg()
+    return err("exception in mountArchive: " & getCurrentExceptionMsg())
 
-proc startMessageRetentionPolicyPeriodicTask*(node: WakuNode, interval: Duration) =
-  if node.wakuArchive.isNil():
-    return
+  if retentionPolicy.isSome():
+    try:
+      debug "executing message retention policy"
+      let retPolRes = waitFor node.wakuArchive.executeMessageRetentionPolicy()
+      if retPolRes.isErr():
+        return err("error in mountArchive: " & retPolRes.error)
+    except CatchableError:
+      return err("exception in mountArch-ret-pol: " & getCurrentExceptionMsg())
 
-  # https://github.com/nim-lang/Nim/issues/17369
-  var executeRetentionPolicy: proc(udata: pointer) {.gcsafe, raises: [Defect].}
-  executeRetentionPolicy = proc(udata: pointer) {.gcsafe.} =
-    executeMessageRetentionPolicy(node)
-    discard setTimer(Moment.fromNow(interval), executeRetentionPolicy)
+    node.wakuArchive.startMessageRetentionPolicyPeriodicTask(
+      WakuArchiveDefaultRetentionPolicyInterval)
 
-  discard setTimer(Moment.fromNow(interval), executeRetentionPolicy)
-
+  return ok()
 
 ## Waku store
 
@@ -583,7 +538,6 @@ proc mountStore*(node: WakuNode) {.async, raises: [Defect, LPError].} =
     await node.wakuStore.start()
 
   node.switch.mount(node.wakuStore, protocolMatcher(WakuStoreCodec))
-
 
 proc mountStoreClient*(node: WakuNode) =
   info "mounting store client"
@@ -820,65 +774,6 @@ proc startKeepalive*(node: WakuNode) =
 
   asyncSpawn node.keepaliveLoop(defaultKeepalive)
 
-proc runDiscv5Loop(node: WakuNode) {.async.} =
-  ## Continuously add newly discovered nodes using Node Discovery v5
-  if node.wakuDiscv5.isNil():
-    warn "Trying to run discovery v5 while it's disabled"
-    return
-
-  info "starting discv5 discovery loop"
-
-  let shardPredOp = shardingPredicate(node.enr)
-
-  while node.wakuDiscv5.listening:
-    trace "running discv5 discovery loop"
-    let discoveredRecords = await node.wakuDiscv5.findRandomPeers(shardPredOp)
-    let discoveredPeers = discoveredRecords.mapIt(it.toRemotePeerInfo()).filterIt(it.isOk()).mapIt(it.value)
-
-    for peer in discoveredPeers:
-      let isNew = not node.peerManager.peerStore[AddressBook].contains(peer.peerId)
-      if isNew:
-        debug "new peer discovered", peer= $peer, origin= "discv5"
-
-      node.peerManager.addPeer(peer, PeerOrigin.Discv5)
-
-    # Discovery `queryRandom` can have a synchronous fast path for example
-    # when no peers are in the routing table. Don't run it in continuous loop.
-    #
-    # Also, give some time to dial the discovered nodes and update stats, etc.
-    await sleepAsync(5.seconds)
-
-proc startDiscv5*(node: WakuNode): Future[Result[void, string]] {.async.} =
-  ## Start Discovery v5 service
-  if node.wakuDiscv5.isNil():
-    return err("discovery v5 is disabled")
-
-  info "Starting discovery v5 service"
-  let res = node.wakuDiscv5.start()
-  if res.isErr():
-    return err("error in startDiscv5: " & res.error)
-
-  trace "Start discovering new peers using discv5"
-  asyncSpawn node.runDiscv5Loop()
-
-  debug "Successfully started discovery v5 service"
-  info "Discv5: discoverable ENR ", enr = node.wakuDiscV5.protocol.localNode.record.toUri()
-  return ok()
-
-
-proc stopDiscv5*(node: WakuNode): Future[bool] {.async.} =
-  ## Stop Discovery v5 service
-
-  if not node.wakuDiscv5.isNil():
-    info "Stopping discovery v5 service"
-
-    ## Stop Discovery v5 process and close listening port
-    if node.wakuDiscv5.listening:
-      trace "Stop listening on discv5 port"
-      await node.wakuDiscv5.closeWait()
-
-    debug "Successfully stopped discovery v5 service"
-
 proc mountRendezvous*(node: WakuNode) {.async, raises: [Defect, LPError].} =
   info "mounting rendezvous discovery protocol"
 
@@ -929,9 +824,6 @@ proc start*(node: WakuNode) {.async.} =
 proc stop*(node: WakuNode) {.async.} =
   if not node.wakuRelay.isNil():
     await node.wakuRelay.stop()
-
-  if not node.wakuDiscv5.isNil():
-    discard await node.stopDiscv5()
 
   await node.switch.stop()
   node.peerManager.stop()

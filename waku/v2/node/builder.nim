@@ -44,9 +44,6 @@ type
     switchSslSecureCert: Option[string]
     switchSendSignedPeerRecord: Option[bool]
 
-    # Waku discv5
-    wakuDiscv5: Option[WakuDiscoveryV5]
-
   WakuNodeBuilderResult* = Result[void, string]
 
 
@@ -80,8 +77,7 @@ proc withNetworkConfigurationDetails*(builder: var WakuNodeBuilder,
           wsEnabled: bool = false,
           wssEnabled: bool = false,
           wakuFlags = none(CapabilitiesBitfield),
-          dns4DomainName = none(string),
-          discv5UdpPort = none(Port)): WakuNodeBuilderResult {.
+          dns4DomainName = none(string)): WakuNodeBuilderResult {.
   deprecated: "use 'builder.withNetworkConfiguration()' instead".} =
   let netConfig = ? NetConfig.init(
     bindIp = bindIp,
@@ -94,7 +90,6 @@ proc withNetworkConfigurationDetails*(builder: var WakuNodeBuilder,
     wssEnabled = wssEnabled,
     wakuFlags = wakuFlags,
     dns4DomainName = dns4DomainName,
-    discv5UdpPort = discv5UdpPort,
   )
   builder.withNetworkConfiguration(netConfig)
   ok()
@@ -132,14 +127,6 @@ proc withSwitchConfiguration*(builder: var WakuNodeBuilder,
   if not nameResolver.isNil():
     builder.switchNameResolver = some(nameResolver)
 
-
-## Waku discv5
-
-proc withWakuDiscv5*(builder: var WakuNodeBuilder, instance: WakuDiscoveryV5) =
-  if not instance.isNil():
-    builder.wakuDiscv5 = some(instance)
-
-
 ## Build
 
 proc build*(builder: WakuNodeBuilder): Result[WakuNode, string] =
@@ -155,12 +142,8 @@ proc build*(builder: WakuNodeBuilder): Result[WakuNode, string] =
   if builder.netConfig.isNone():
     return err("network configuration is required")
 
-  # fallbck to max connections if not set
-  var maxRelayPeers: int
-  if builder.maxRelayPeers.isNone():
-    maxRelayPeers = builder.switchMaxConnections.get(builders.MaxConnections)
-  else:
-    maxRelayPeers = builder.maxRelayPeers.get()
+  if builder.record.isNone():
+    return err("node record is required")
 
   var switch: Switch
   try:
@@ -186,17 +169,15 @@ proc build*(builder: WakuNodeBuilder): Result[WakuNode, string] =
   let peerManager = PeerManager.new(
     switch = switch,
     storage = builder.peerStorage.get(nil),
-    maxRelayPeers = maxRelayPeers,
+    maxRelayPeers = builder.maxRelayPeers,
   )
 
   var node: WakuNode
   try:
     node = WakuNode.new(
-      nodeKey = builder.nodeKey.get(),
       netConfig = builder.netConfig.get(),
-      enr = builder.record,
+      enr = builder.record.get(),
       switch = switch,
-      wakuDiscv5 = builder.wakuDiscv5,
       peerManager = peerManager,
       rng = rng,
     )
