@@ -48,18 +48,18 @@ jobs:
         id: build
         run: |
 
-          make -j${NPROC} V=1 QUICK_AND_DIRTY_COMPILER=1 NIMFLAGS="-d:disableMarchNative" wakunode2 
+          make -j${NPROC} V=1 QUICK_AND_DIRTY_COMPILER=1 NIMFLAGS="-d:disableMarchNative -d:postgres" wakunode2 
 
           SHORT_REF=$(git rev-parse --short HEAD)
 
           TAG=$([ "${PR_NUMBER}" == "" ] && echo "${SHORT_REF}" || echo "${PR_NUMBER}")
-          IMAGE=quay.io/wakuorg/nwaku-pr:${TAG}
+          IMAGE=ivansete/nim-waku:${TAG}
 
           echo "image=${IMAGE}" >> $GITHUB_OUTPUT
           echo "commit_hash=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
 
-          docker login -u ${QUAY_USER} -p ${QUAY_PASSWORD} quay.io
-          docker build -t ${IMAGE} -f docker/binaries/Dockerfile.bn.amd64 --label quay.expires-after=7d .
+          docker login -u ${DOCKER_USER} -p ${DOCKER_PASSWORD} https://index.docker.io/v1
+          docker build -t ${IMAGE} -f docker/binaries/Dockerfile.bn.amd64 
           docker push ${IMAGE}
         env:
           QUAY_PASSWORD: ${{ secrets.QUAY_PASSWORD }}
