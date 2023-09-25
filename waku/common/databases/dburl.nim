@@ -4,6 +4,7 @@ import
   regex,
   stew/results
 
+
 proc validateDbUrl*(dbUrl: string): Result[string, string] =
   ## dbUrl mimics SQLAlchemy Database URL schema
   ## See: https://docs.sqlalchemy.org/en/14/core/engines.html#database-urls
