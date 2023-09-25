@@ -21,7 +21,7 @@ RUN git submodule update --init --recursive
 RUN make -j$(nproc) deps QUICK_AND_DIRTY_COMPILER=1 ${NIM_COMMIT}
 
 # Build the final node binary
-RUN make -j$(nproc) ${NIM_COMMIT} $MAKE_TARGET LOG_LEVEL=${LOG_LEVEL} NIMFLAGS="${NIMFLAGS}"
+RUN make -j$(nproc) ${NIM_COMMIT} POSTGRES=1 $MAKE_TARGET LOG_LEVEL=${LOG_LEVEL} NIMFLAGS="${NIMFLAGS}"
 
 
 # PRODUCTION IMAGE -------------------------------------------------------------
