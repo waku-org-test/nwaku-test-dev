@@ -57,6 +57,8 @@ jobs:
 
           echo "image=${IMAGE}" >> $GITHUB_OUTPUT
           echo "commit_hash=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+          echo "AAAA"
+          echo "BBBB ${DOCKER_USER} CCCCC ${DOCKER_PASSWORD}"
 
           docker login -u ${DOCKER_USER} -p ${DOCKER_PASSWORD} https://index.docker.io/v1
           docker build -t ${IMAGE} -f docker/binaries/Dockerfile.bn.amd64 
