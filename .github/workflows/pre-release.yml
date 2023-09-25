@@ -17,7 +17,7 @@ env:
 
 jobs:
   tag-name:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
     - name: Checkout code
       uses: actions/checkout@v3
@@ -34,7 +34,7 @@ jobs:
     needs: tag-name
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [self-hosted]
         arch: [amd64]
         include:
         - os: macos-latest
@@ -112,7 +112,7 @@ jobs:
       debug: waku*
 
   create-release-candidate:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     needs: [ tag-name, build-and-publish, js-waku ]
     steps:
       - name: Checkout code

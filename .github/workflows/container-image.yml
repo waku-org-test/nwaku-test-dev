@@ -20,7 +20,7 @@ jobs:
   build-docker-image:
     strategy:
       matrix:
-        os: [ubuntu-latest]
+        os: [self-hosted]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
 
